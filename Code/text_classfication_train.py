@@ -18,6 +18,7 @@ from const import data_dir, model_dir, cache_dir
 from gensim import corpora, models
 from sklearn import svm
 from scipy.sparse import csr_matrix
+from sklearn.metrics import classification_report
 
 
 
@@ -53,25 +54,17 @@ def svm_classify(train_set,train_tag,test_set,test_tag):
     clf_res = clf.fit(train_set,train_tag)
     train_pred  = clf_res.predict(train_set)
     test_pred = clf_res.predict(test_set)
-
-    train_err_num, train_err_ratio = checkPred(train_tag, train_pred)
-    test_err_num, test_err_ratio  = checkPred(test_tag, test_pred)
+    files = os.listdir(path_tmp_lsi)
+    catg_list = []
+    for file in files:
+        t = file.split('.')[0]
+        if t not in catg_list:
+            catg_list.append(t)
 
     print('=== 分类训练完毕，分类结果如下 ===')
-    print('训练集误差: {e}'.format(e=train_err_ratio))
-    print('检验集误差: {e}'.format(e=test_err_ratio))
-
+    print(classification_report(train_tag, train_pred, target_names=catg_list))
+    print(classification_report(test_tag, test_pred, target_names=catg_list))
     return clf_res
-
-def checkPred(data_tag, data_pred):
-    if data_tag.__len__() != data_pred.__len__():
-        raise RuntimeError('The length of data tag and data pred should be the same')
-    err_count = 0
-    for i in range(data_tag.__len__()):
-        if data_tag[i]!=data_pred[i]:
-            err_count += 1
-    err_ratio = err_count / data_tag.__len__()
-    return [err_count, err_ratio]
 
 
 if __name__=='__main__':
@@ -92,13 +85,6 @@ if __name__=='__main__':
     path_tmp_lsi_model = os.path.join(path_tmp, 'model.lsi.pkl')
     path_tmp_predictor = os.path.join(path_tmp, 'predictor.pkl')
     path_vec_corpus = os.path.join(path_tmp, 'news_corpus.mm')
-    path_tfidf_tiyu_mm = os.path.join(path_tmp, 'tfidf_corpus', '体育.mm')
-    path_tfidf_yule_mm = os.path.join(path_tmp, 'tfidf_corpus', '娱乐.mm')
-    path_tfidf_jiaoyu_mm = os.path.join(path_tmp, 'tfidf_corpus', '教育.mm')
-    path_tfidf_shizheng_mm = os.path.join(path_tmp, 'tfidf_corpus', '时政.mm')
-    path_tfidf_keji_mm = os.path.join(path_tmp, 'tfidf_corpus', '科技.mm')
-    path_tfidf_caijing_mm = os.path.join(path_tmp, 'tfidf_corpus', '财经.mm')
-
 
     if not os.path.exists(path_tmp):
         os.makedirs(path_tmp)
@@ -196,12 +182,6 @@ if __name__=='__main__':
             dictionary = corpora.Dictionary.load(path_dictionary)
         if not corpus_tfidf:
 
-            # corpus_tfidf_tiyu = corpora.MmCorpus(path_tfidf_tiyu_mm)  ##体育tfidf向量
-            # corpus_tfidf_yule = corpora.MmCorpus(path_tfidf_yule_mm)  ##娱乐tfidf向量
-            # corpus_tfidf_jiaoyu = corpora.MmCorpus(path_tfidf_jiaoyu_mm) ##教育tfidf向量
-            # corpus_tfidf_shizheng = corpora.MmCorpus(path_tfidf_shizheng_mm) ##时政tfidf向量
-            # corpus_tfidf_keji = corpora.MmCorpus(path_tfidf_keji_mm) ##科技tfidf向量
-            # corpus_tfidf_caijing = corpora.MmCorpus(path_tfidf_caijing_mm) ##财经tfidf向量
             print('=== 未检测到tfidf文档，开始从磁盘中读取 ===')
             # 从对应文件夹中读取所有类别
             files = os.listdir(path_tmp_tfidf)
@@ -243,85 +223,76 @@ if __name__=='__main__':
                                        corpus,
                                        id2word=dictionary)
 
-
-        # lsi = models.LsiModel(corpus_tfidf_tiyu, id2word=dictionary, num_topics=50)
-        # lsi.add_documents(corpus_tfidf_yule)
-        # lsi.add_documents(corpus_tfidf_jiaoyu)
-        # lsi.add_documents(corpus_tfidf_shizheng)
-        # lsi.add_documents(corpus_tfidf_keji)
-        # lsi.add_documents(corpus_tfidf_caijing)
         print('=== LSI向量生成完毕 ===')
 
-        #print(lsi.print_topics(10))
-        #index = similarities.MatrixSimilarity(lsi[file_bow])
     else:
         print('=== 检测到LSI向量已经生成，跳过该阶段 ===')
-    if not os.path.exists(path_tmp_predictor):
-        print('=== 未检测到分类器存在,开始进行分类过程 ===')
-        if not corpus_lsi: # 如果跳过了第三阶段
-            print('=== 未检测到lsi文档，开始从磁盘中读取 ===')
-            files = os.listdir(path_tmp_lsi)
-            catg_list = []
-            for file in files:
-                t = file.split('.')[0]
-                if t not in catg_list:
-                    catg_list.append(t)
-            # 从磁盘中读取corpus
-            corpus_lsi = {}
-            for catg in catg_list:
-                path = '{f}{s}{c}.mm'.format(f=path_tmp_lsi,s=os.sep,c=catg)
-                corpus = corpora.MmCorpus(path)
-                corpus_lsi[catg] = corpus
-            print('=== lsi文档读取完毕，开始进行分类 ===')
-        tag_list = []
-        doc_num_list = []
-        corpus_lsi_total = []
-        catg_list = []
+    # if not os.path.exists(path_tmp_predictor):
+    print('=== 未检测到分类器存在,开始进行分类过程 ===')
+    if not corpus_lsi: # 如果跳过了第三阶段
+        print('=== 未检测到lsi文档，开始从磁盘中读取 ===')
         files = os.listdir(path_tmp_lsi)
+        catg_list = []
         for file in files:
             t = file.split('.')[0]
             if t not in catg_list:
                 catg_list.append(t)
-        for count,catg in enumerate(catg_list):
-            tmp = corpus_lsi[catg]
-            tag_list += [count]*tmp.__len__()
-            doc_num_list.append(tmp.__len__())
-            corpus_lsi_total += tmp
-            corpus_lsi.pop(catg)
+        # 从磁盘中读取corpus
+        corpus_lsi = {}
+        for catg in catg_list:
+            path = '{f}{s}{c}.mm'.format(f=path_tmp_lsi,s=os.sep,c=catg)
+            corpus = corpora.MmCorpus(path)
+            corpus_lsi[catg] = corpus
+        print('=== lsi文档读取完毕，开始进行分类 ===')
+    tag_list = []
+    doc_num_list = []
+    corpus_lsi_total = []
+    catg_list = []
+    files = os.listdir(path_tmp_lsi)
+    for file in files:
+        t = file.split('.')[0]
+        if t not in catg_list:
+            catg_list.append(t)
+    for count,catg in enumerate(catg_list):
+        tmp = corpus_lsi[catg]
+        tag_list += [count]*tmp.__len__()
+        doc_num_list.append(tmp.__len__())
+        corpus_lsi_total += tmp
+        corpus_lsi.pop(catg)
 
-        # 将gensim中的mm表示转化成numpy矩阵表示
-        data = []
-        rows = []
-        cols = []
-        line_count = 0
-        for line in corpus_lsi_total:
-            for elem in line:
-                rows.append(line_count)
-                cols.append(elem[0])
-                data.append(elem[1])
-            line_count += 1
-        lsi_matrix = csr_matrix((data,(rows,cols))).toarray()
-        # 生成训练集和测试集
-        rarray=np.random.random(size=line_count)
-        train_set = []
-        train_tag = []
-        test_set = []
-        test_tag = []
-        for i in range(line_count):
-            if rarray[i]<0.5:
-                train_set.append(lsi_matrix[i,:])
-                train_tag.append(tag_list[i])
-            else:
-                test_set.append(lsi_matrix[i,:])
-                test_tag.append(tag_list[i])
+    # 将gensim中的mm表示转化成numpy矩阵表示
+    data = []
+    rows = []
+    cols = []
+    line_count = 0
+    for line in corpus_lsi_total:
+        for elem in line:
+            rows.append(line_count)
+            cols.append(elem[0])
+            data.append(elem[1])
+        line_count += 1
+    lsi_matrix = csr_matrix((data,(rows,cols))).toarray()
+    # 生成训练集和测试集
+    rarray=np.random.random(size=line_count)
+    train_set = []
+    train_tag = []
+    test_set = []
+    test_tag = []
+    for i in range(line_count):
+        if rarray[i]<0.5:
+            train_set.append(lsi_matrix[i,:])
+            train_tag.append(tag_list[i])
+        else:
+            test_set.append(lsi_matrix[i,:])
+            test_tag.append(tag_list[i])
 
-        # 生成分类器
-        predictor = svm_classify(train_set,train_tag,test_set,test_tag)
-        x = open(path_tmp_predictor,'wb')
-        pkl.dump(predictor, x)
-        x.close()
-    else:
-        print('=== 检测到分类器已经生成，跳过该阶段 ===')
+    # 生成分类器
+    predictor = svm_classify(train_set,train_tag,test_set,test_tag)
+    x = open(path_tmp_predictor,'wb')
+    pkl.dump(predictor, x)
+    x.close()
+    # else:
+    #     print('=== 检测到分类器已经生成，跳过该阶段 ===')
 
     end = time.time()
     print('total spent times:%.2f' % (end-start)+ ' s')
