@@ -12,6 +12,7 @@ import sys
 import logging
 import pickle as pkl
 import numpy as np
+import json
 
 from pretreat import *
 from const import data_dir, model_dir, cache_dir
@@ -19,7 +20,7 @@ from gensim import corpora, models
 from sklearn import svm
 from scipy.sparse import csr_matrix
 from sklearn.metrics import classification_report
-
+from sklearn.externals import joblib
 
 
 
@@ -50,9 +51,10 @@ class loadFiles(object):
 
 def svm_classify(train_set,train_tag,test_set,test_tag):
 
-    clf = svm.LinearSVC()
+    clf = svm.SVC(kernel='rbf', C=4, gamma='scale')
     clf_res = clf.fit(train_set,train_tag)
-    train_pred  = clf_res.predict(train_set)
+    #train_pred  = clf_res.predict(train_set)
+    print('{t} === 分类器生成完毕，开始分类 ==='.format(t=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())))
     test_pred = clf_res.predict(test_set)
     files = os.listdir(path_tmp_lsi)
     catg_list = []
@@ -61,9 +63,9 @@ def svm_classify(train_set,train_tag,test_set,test_tag):
         if t not in catg_list:
             catg_list.append(t)
 
-    print('=== 分类训练完毕，分类结果如下 ===')
-    print(classification_report(train_tag, train_pred, target_names=catg_list))
+    print('{t} === 分类训练完毕，分类结果如下 ==='.format(t=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())))
     print(classification_report(test_tag, test_pred, target_names=catg_list))
+
     return clf_res
 
 
@@ -75,16 +77,18 @@ if __name__=='__main__':
                     datefmt='%a, %d %b %Y %H:%M:%S',
                     )
 
-    n = 10  # n 表示抽样率
-    path_doc_root = data_dir + '/CSCMNews'  # 根目录 即存放按类分类好的文本数据集
-    path_tmp = model_dir + '/CSCMNews_model'  # 存放中间结果的位置
-    path_dictionary = os.path.join(path_tmp, 'CSCMNews.dict')
+    n = 1  # n 表示抽样率
+    path_doc_root = data_dir + '/News'  # 根目录 即存放按类分类好的文本数据集
+    path_tmp = model_dir + '/News_model'  # 存放中间结果的位置
+    path_dictionary = os.path.join(path_tmp, 'News.dict')
     path_news = os.path.join(cache_dir, 'news.txt')
     path_tmp_tfidf = os.path.join(path_tmp, 'tfidf_corpus')
     path_tmp_lsi = os.path.join(path_tmp, 'lsi_corpus')
     path_tmp_lsi_model = os.path.join(path_tmp, 'model.lsi.pkl')
-    path_tmp_predictor = os.path.join(path_tmp, 'predictor.pkl')
+    path_tmp_predictor = os.path.join(path_tmp, 'svm.model')
     path_vec_corpus = os.path.join(path_tmp, 'news_corpus.mm')
+    path_test_set = os.path.join(cache_dir, 'test_set.pkl')
+    path_test_tag = os.path.join(cache_dir, 'test_tag.pkl')
 
     if not os.path.exists(path_tmp):
         os.makedirs(path_tmp)
@@ -206,7 +210,7 @@ if __name__=='__main__':
         for catg in catgs:
             tmp = corpus_tfidf.get(catg)
             corpus_tfidf_total += tmp
-        lsi_model = models.LsiModel(corpus = corpus_tfidf_total, id2word=dictionary, num_topics=50)
+        lsi_model = models.LsiModel(corpus = corpus_tfidf_total, id2word=dictionary, num_topics=150, chunksize=20000)
         #将lsi模型存储到磁盘上
         lsi_file = open(path_tmp_lsi_model, 'wb')
         pkl.dump(lsi_model, lsi_file)
@@ -227,72 +231,98 @@ if __name__=='__main__':
 
     else:
         print('=== 检测到LSI向量已经生成，跳过该阶段 ===')
-    # if not os.path.exists(path_tmp_predictor):
-    print('=== 未检测到分类器存在,开始进行分类过程 ===')
-    if not corpus_lsi: # 如果跳过了第三阶段
-        print('=== 未检测到lsi文档，开始从磁盘中读取 ===')
+    if not os.path.exists(path_tmp_predictor):
+        print('=== 未检测到分类器存在,开始进行分类过程 ===')
+        if not corpus_lsi: # 如果跳过了第三阶段
+            print('=== 未检测到lsi文档，开始从磁盘中读取 ===')
+            files = os.listdir(path_tmp_lsi)
+            catg_list = []
+            for file in files:
+                t = file.split('.')[0]
+                if t not in catg_list:
+                    catg_list.append(t)
+            # 从磁盘中读取corpus
+            corpus_lsi = {}
+            for catg in catg_list:
+                path = '{f}{s}{c}.mm'.format(f=path_tmp_lsi,s=os.sep,c=catg)
+                corpus = corpora.MmCorpus(path)
+                corpus_lsi[catg] = corpus
+            print('=== lsi文档读取完毕，开始进行分类 ===')
+        tag_list = []
+        doc_num_list = []
+        corpus_lsi_total = []
+        catg_list = []
+        files = os.listdir(path_tmp_lsi)
+        for file in files:
+            t = file.split('.')[0]
+            if t not in catg_list:
+                catg_list.append(t)
+        for count,catg in enumerate(catg_list):
+            tmp = corpus_lsi[catg]
+            tag_list += [count]*tmp.__len__()
+            doc_num_list.append(tmp.__len__())
+            corpus_lsi_total += tmp
+            corpus_lsi.pop(catg)
+
+        # 将gensim中的mm表示转化成numpy矩阵表示
+        data = []
+        rows = []
+        cols = []
+        line_count = 0
+        for line in corpus_lsi_total:
+            for elem in line:
+                rows.append(line_count)
+                cols.append(elem[0])
+                data.append(elem[1])
+            line_count += 1
+        lsi_matrix = csr_matrix((data,(rows,cols))).toarray()
+        # 生成训练集和测试集
+        rarray=np.random.random(size=line_count)
+        train_set = []
+        train_tag = []
+        test_set = []
+        test_tag = []
+        for i in range(line_count):
+            if rarray[i]<0.5:
+                train_set.append(lsi_matrix[i,:])
+                train_tag.append(tag_list[i])
+            else:
+                test_set.append(lsi_matrix[i,:])
+                test_tag.append(tag_list[i])
+
+        test_set_pkl = open(path_test_set, 'wb')
+        pkl.dump(test_set, test_set_pkl)
+        test_set_pkl.close()
+        test_tag_pkl = open(path_test_tag, 'wb')
+        pkl.dump(test_tag, test_tag_pkl)
+        test_tag_pkl.close()
+        print('=== 训练集 测试集 生成完毕 ===')
+        # 生成分类器
+        predictor = svm_classify(train_set,train_tag,test_set,test_tag)
+        joblib.dump(predictor, path_tmp_predictor)
+    else:
+        print('=== 检测到分类器已经生成，跳过该阶段 ===')
+        predictor = joblib.load(path_tmp_predictor)
+        print('{t} === 分类器加载完毕 ==='.format(t=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())))
+        test_set_pkl = open(path_test_set, 'rb')
+        test_set = pkl.load(test_set_pkl)
+        test_set_pkl.close()
+        print('{t} === 测试集加载完毕 ==='.format(t=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())))
+        test_tag_pkl = open(path_test_tag, 'rb')
+        test_tag = pkl.load(test_tag_pkl)
+        test_tag_pkl.close()
+        print('{t}=== 测试标签加载完毕 ==='.format(t=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())))
+        test_pred = predictor.predict(test_set)
         files = os.listdir(path_tmp_lsi)
         catg_list = []
         for file in files:
             t = file.split('.')[0]
             if t not in catg_list:
                 catg_list.append(t)
-        # 从磁盘中读取corpus
-        corpus_lsi = {}
-        for catg in catg_list:
-            path = '{f}{s}{c}.mm'.format(f=path_tmp_lsi,s=os.sep,c=catg)
-            corpus = corpora.MmCorpus(path)
-            corpus_lsi[catg] = corpus
-        print('=== lsi文档读取完毕，开始进行分类 ===')
-    tag_list = []
-    doc_num_list = []
-    corpus_lsi_total = []
-    catg_list = []
-    files = os.listdir(path_tmp_lsi)
-    for file in files:
-        t = file.split('.')[0]
-        if t not in catg_list:
-            catg_list.append(t)
-    for count,catg in enumerate(catg_list):
-        tmp = corpus_lsi[catg]
-        tag_list += [count]*tmp.__len__()
-        doc_num_list.append(tmp.__len__())
-        corpus_lsi_total += tmp
-        corpus_lsi.pop(catg)
 
-    # 将gensim中的mm表示转化成numpy矩阵表示
-    data = []
-    rows = []
-    cols = []
-    line_count = 0
-    for line in corpus_lsi_total:
-        for elem in line:
-            rows.append(line_count)
-            cols.append(elem[0])
-            data.append(elem[1])
-        line_count += 1
-    lsi_matrix = csr_matrix((data,(rows,cols))).toarray()
-    # 生成训练集和测试集
-    rarray=np.random.random(size=line_count)
-    train_set = []
-    train_tag = []
-    test_set = []
-    test_tag = []
-    for i in range(line_count):
-        if rarray[i]<0.5:
-            train_set.append(lsi_matrix[i,:])
-            train_tag.append(tag_list[i])
-        else:
-            test_set.append(lsi_matrix[i,:])
-            test_tag.append(tag_list[i])
+        print('{t}=== 分类完毕，分类结果如下 ==='.format(t=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime())))
+        print(classification_report(test_tag, test_pred, target_names=catg_list))
 
-    # 生成分类器
-    predictor = svm_classify(train_set,train_tag,test_set,test_tag)
-    x = open(path_tmp_predictor,'wb')
-    pkl.dump(predictor, x)
-    x.close()
-    # else:
-    #     print('=== 检测到分类器已经生成，跳过该阶段 ===')
 
     end = time.time()
     print('total spent times:%.2f' % (end-start)+ ' s')
